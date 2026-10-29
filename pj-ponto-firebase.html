@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PJ Ponto Eletrônico — REP-P</title>
+<style>
+:root{--bg:#f6f5f2;--sf:#fff;--tx:#1b1b1b;--mu:#6b6b6b;--ac:#c2410c;--bd:#e2e0da;--ok:#15803d;--er:#b91c1c;color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14120f;--sf:#1f1c18;--tx:#f1ede6;--mu:#a39d92;--ac:#f59e0b;--bd:#37322b;--ok:#4ade80;--er:#f87171;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14120f;--sf:#1f1c18;--tx:#f1ede6;--mu:#a39d92;--ac:#f59e0b;--bd:#37322b;--ok:#4ade80;--er:#f87171;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,sans-serif}
+.w{max-width:900px;margin:0 auto;padding:14px}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+.logo{font-weight:800}.logo b{color:var(--ac)}
+.c{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+h2{font-size:17px;margin:0 0 10px}
+input,select,textarea{width:100%;padding:10px;margin:4px 0 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+label{font-size:12px;color:var(--mu)}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;cursor:pointer}
+button.g{background:transparent;color:var(--tx);border:1px solid var(--bd)}button:disabled{opacity:.5}
+.tabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px}.tabs button{white-space:nowrap}
+.big{width:100%;padding:22px;font-size:20px}
+.t{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+.x{text-decoration:line-through;color:var(--mu)}.m{color:var(--mu);font-size:13px}.ok{color:var(--ok)}.er{color:var(--er)}
+.md{position:fixed;inset:0;background:#0008;display:flex;align-items:center;justify-content:center;padding:14px}
+.md>div{background:var(--sf);border-radius:14px;padding:18px;max-width:420px;width:100%}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media print{header,.tabs,button,.md button{display:none!important}}
+</style></head><body><div class="w" id="app"><p class="m">Carregando…</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-auth-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-database-compat.min.js"></script>
+<script>
+// ===== COLE AQUI a configuração do seu projeto Firebase =====
+const CFG={apiKey:"AIzaSyBrgFpPp2CplpfImldANu-RB8mOdtf3Trg",authDomain:"ponto-legalizado.firebaseapp.com",databaseURL:"https://ponto-legalizado-default-rtdb.firebaseio.com",projectId:"ponto-legalizado",storageBucket:"ponto-legalizado.firebasestorage.app",messagingSenderId:"1034396868956",appId:"1:1034396868956:web:f403f21d78fc360ea06199"};
+// ============================================================
+firebase.initializeApp(CFG);
+const auth=firebase.auth(),db=firebase.database(),TS=firebase.database.ServerValue.TIMESTAMP;
+const val=async p=>(await db.ref(p).get()).val();
+const pad=n=>String(n).padStart(2,'0'),dg=s=>String(s).replace(/\D/g,'');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=ts=>new Date(ts).toLocaleString('pt-BR');
+const dkey=ts=>{const d=new Date(ts);return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())};
+const hm=ts=>new Date(ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+const cpfOk=c=>{c=dg(c);if(c.length!=11||/^(\d)\1+$/.test(c))return false;for(let t=9;t<11;t++){let s=0;for(let i=0;i<t;i++)s+=c[i]*(t+1-i);if((s*10%11)%10!=c[t])return false}return true};
+const $=s=>document.querySelector(s);
+const modal=h=>{const m=document.createElement('div');m.className='md';m.innerHTML='<div>'+h+'<br><button class="g" onclick="this.closest(\'.md\').remove()">Fechar</button></div>';document.body.appendChild(m)};
+let me=null,tab='ponto',ym=dkey(Date.now()).slice(0,7),sel='',D={emp:{},users:{},regs:[],trat:[]};
+const U=id=>D.users[id]||{nome:'?',cpf:''};
+const flat=o=>Object.values(o||{}).flatMap(x=>Object.values(x));
+
+auth.onAuthStateChanged(async u=>{
+ if(!u){me=null;return R()}
+ const p=await val('usuarios/'+u.uid);
+ if(!p||!p.ativo){await auth.signOut();alert('Usuário sem acesso ao sistema.');return}
+ me={...p,uid:u.uid};sel=u.uid;await load();R();
+});
+async function load(){
+ D.emp=await val('empresa')||{};
+ if(me.role=='admin'){D.users=await val('usuarios')||{};D.regs=flat(await val('registros'));D.trat=flat(await val('tratamentos'))}
+ else{D.users={[me.uid]:me};D.regs=Object.values(await val('registros/'+me.uid)||{});D.trat=Object.values(await val('tratamentos/'+me.uid)||{})}
+ D.regs.sort((a,b)=>a.nsr-b.nsr);D.trat.sort((a,b)=>a.criado-b.criado);
+}
+function R(){
+ const a=$('#app');
+ if(!me){a.innerHTML=`<header><div class="logo"><b>PJ</b> Ponto</div></header><div class="c"><h2>Entrar</h2><label>CPF</label><input id="lc" inputmode="numeric"><label>Senha</label><input id="ls" type="password"><button onclick="login()">Entrar</button></div>`;return}
+ const adm=me.role=='admin';
+ const tabs=[['ponto','Bater ponto'],['esp','Espelho']].concat(adm?[['col','Colaboradores'],['trat','Tratamento'],['exp','Exportar/Integridade']]:[]);
+ a.innerHTML=`<header><div class="logo"><b>PJ</b> Ponto <span class="m">${esc(D.emp.rs)}</span></div><button class="g" onclick="auth.signOut()">Sair</button></header>
+ <div class="tabs">${tabs.map(t=>`<button class="${tab==t[0]?'':'g'}" onclick="tab='${t[0]}';R()">${t[1]}</button>`).join('')}</div><div id="v"></div>`;
+ ({ponto:vPonto,esp:vEsp,col:vCol,trat:vTrat,exp:vExp})[tab]();
+}
+async function login(){
+ const c=dg($('#lc').value);
+ try{await auth.signInWithEmailAndPassword(c+'@ponto.pj',$('#ls').value)}catch(e){alert('CPF ou senha incorretos.')}
+}
+function vPonto(){
+ const hoje=D.regs.filter(r=>r.uid==me.uid&&dkey(r.ts)==dkey(Date.now()));
+ $('#v').innerHTML=`<div class="c"><h2>Olá, ${esc(me.nome)}</h2><p class="m">Registros de hoje: ${hoje.length?hoje.map(r=>hm(r.ts)).join(' · '):'nenhum'}</p>
+ <button class="big" id="bb" onclick="bater()">Registrar ponto</button>
+ <p class="m">O horário é gravado pelo servidor. A localização (GPS) é coletada apenas no momento do registro, conforme a política de privacidade.</p></div>
+ <div class="c"><h2>Últimos comprovantes</h2><div class="t"><table><tr><th>NSR</th><th>Data/hora</th><th></th></tr>${D.regs.filter(r=>r.uid==me.uid).slice(-8).reverse().map(r=>`<tr><td>${r.nsr}</td><td>${fmt(r.ts)}</td><td><button class="g" onclick="comp(${r.nsr},'${r.uid}')">Ver</button></td></tr>`).join('')}</table></div></div>`;
+}
+let busy=false;
+async function bater(){
+ if(busy)return;busy=true;$('#bb').disabled=true;
+ try{
+  let geo=null;try{geo=await new Promise((o,e)=>navigator.geolocation.getCurrentPosition(p=>o([+p.coords.latitude.toFixed(5),+p.coords.longitude.toFixed(5)]),e,{timeout:5000}))}catch(e){}
+  for(let i=0;i<6;i++){
+   const n=((await val('contador'))||{n:0}).n+1,r={nsr:n,uid:me.uid,ts:TS};if(geo)r.geo=geo;
+   try{
+    await db.ref().update({['registros/'+me.uid+'/'+n]:r,contador:{n,uid:me.uid}});
+    await load();R();return comp(n,me.uid);
+   }catch(e){await new Promise(s=>setTimeout(s,300+Math.random()*400))}
+  }
+  alert('Não foi possível registrar agora. Verifique a conexão e tente novamente.');
+ }finally{busy=false;const b=$('#bb');if(b)b.disabled=false}
+}
+function comp(n,uid){
+ const r=D.regs.find(x=>x.nsr==n&&x.uid==uid),u=U(uid);
+ modal(`<h2>Comprovante de registro de ponto</h2><p><b>${esc(D.emp.rs)}</b><br>CNPJ ${esc(D.emp.cnpj)}<br>Local: ${esc(D.emp.local)}</p>
+ <p>Trabalhador: ${esc(u.nome)}<br>CPF ${esc(u.cpf)}<br>NSR: <b>${r.nsr}</b><br>Data/hora: ${fmt(r.ts)}<br>${r.geo?'GPS: '+r.geo.join(', ')+'<br>':''}</p><button onclick="window.print()">Imprimir / salvar PDF</button>`);
+}
+function dias(uid,mes){
+ const o={};
+ D.regs.filter(r=>r.uid==uid&&dkey(r.ts).startsWith(mes)).forEach(r=>(o[dkey(r.ts)]=o[dkey(r.ts)]||[]).push({ts:r.ts,nsr:r.nsr,x:false}));
+ D.trat.filter(t=>t.uid==uid&&t.data.startsWith(mes)).forEach(t=>{
+  if(t.tipo=='incluir')(o[t.data]=o[t.data]||[]).push({ts:new Date(t.data+'T'+t.hora).getTime(),tr:1,x:false});
+  else for(const k in o)o[k].forEach(m=>{if(m.nsr==t.nsr)m.x=true});
+ });return o;
+}
+function vEsp(){
+ const adm=me.role=='admin',uid=adm?(sel||me.uid):me.uid,d=dias(uid,ym),ks=Object.keys(d).sort();let tot=0;
+ const rows=ks.map(k=>{const m=d[k].sort((a,b)=>a.ts-b.ts),v=m.filter(x=>!x.x);let s=0;for(let i=0;i+1<v.length;i+=2)s+=v[i+1].ts-v[i].ts;tot+=s;
+  return `<tr><td>${k.split('-').reverse().join('/')}</td><td>${m.map(x=>`<span class="${x.x?'x':''}">${hm(x.ts)}${x.tr?'*':''}</span>`).join(' · ')}</td><td>${v.length%2?'<span class="er">ímpar</span>':Math.floor(s/36e5)+'h'+pad(Math.round(s%36e5/6e4))}</td></tr>`}).join('');
+ $('#v').innerHTML=`<div class="c"><h2>Espelho de ponto</h2><div class="row"><div><label>Mês</label><input type="month" value="${ym}" onchange="ym=this.value;R()"></div>
+ ${adm?`<div><label>Colaborador</label><select onchange="sel=this.value;R()">${Object.entries(D.users).map(([id,u])=>`<option value="${id}" ${id==uid?'selected':''}>${esc(u.nome)}</option>`).join('')}</select></div>`:''}</div>
+ <p class="m">${esc(D.emp.rs)} · CNPJ ${esc(D.emp.cnpj)} · ${esc(D.emp.local)}<br>${esc(U(uid).nome)} · CPF ${esc(U(uid).cpf)}</p>
+ <div class="t"><table><tr><th>Dia</th><th>Marcações</th><th>Horas</th></tr>${rows||'<tr><td colspan=3 class="m">Sem registros.</td></tr>'}</table></div>
+ <p class="m">* incluída por tratamento · riscado = desconsiderada (registro original preservado). Total: <b>${Math.floor(tot/36e5)}h${pad(Math.round(tot%36e5/6e4))}</b></p>
+ <button onclick="window.print()">Imprimir / PDF</button></div>`;
+}
+function vCol(){
+ $('#v').innerHTML=`<div class="c"><h2>Novo colaborador</h2><div class="row"><div><label>Nome</label><input id="n"></div><div><label>CPF</label><input id="c" inputmode="numeric"></div>
+ <div><label>Matrícula</label><input id="m"></div><div><label>Senha inicial (6+)</label><input id="s" type="password"></div></div><button onclick="novoCol()">Cadastrar</button></div>
+ <div class="c"><h2>Colaboradores</h2><div class="t"><table><tr><th>Nome</th><th>CPF</th><th>Perfil</th><th>Status</th><th></th></tr>${Object.entries(D.users).map(([id,u])=>`<tr><td>${esc(u.nome)}</td><td>${u.cpf}</td><td>${u.role}</td><td>${u.ativo?'ativo':'inativo'}</td><td>${id!=me.uid?`<button class="g" onclick="tog('${id}')">${u.ativo?'Inativar':'Reativar'}</button>`:''}</td></tr>`).join('')}</table></div>
+ <p class="m">Colaboradores não são excluídos, apenas inativados, para preservar o histórico.</p></div>`;
+}
+async function novoCol(){
+ const v=i=>$('#'+i).value.trim();
+ if(!v('n')||!cpfOk(v('c'))||v('s').length<6)return alert('Confira nome, CPF válido e senha com 6+ caracteres.');
+ const sec=firebase.apps.find(a=>a.name=='sec')||firebase.initializeApp(CFG,'sec');
+ try{
+  const cr=await sec.auth().createUserWithEmailAndPassword(dg(v('c'))+'@ponto.pj',v('s'));
+  await db.ref('usuarios/'+cr.user.uid).set({nome:v('n'),cpf:dg(v('c')),mat:v('m'),role:'colaborador',ativo:true});
+  await sec.auth().signOut();await load();R();
+ }catch(e){alert('Erro: '+(e.code=='auth/email-already-in-use'?'CPF já cadastrado.':e.message))}
+}
+async function tog(id){await db.ref('usuarios/'+id+'/ativo').set(!D.users[id].ativo);await load();R()}
+function vTrat(){
+ $('#v').innerHTML=`<div class="c"><h2>Tratamento de ponto</h2><p class="m">Correções não alteram o registro original: ficam em coleção separada, com motivo, autor e data do servidor.</p>
+ <div class="row"><div><label>Colaborador</label><select id="tu">${Object.entries(D.users).map(([id,u])=>`<option value="${id}">${esc(u.nome)}</option>`).join('')}</select></div>
+ <div><label>Tipo</label><select id="tt" onchange="$('#tn').style.display=this.value=='incluir'?'none':'block'"><option value="incluir">Incluir marcação</option><option value="desconsiderar">Desconsiderar marcação (NSR)</option></select></div>
+ <div><label>Data</label><input id="td" type="date"></div><div><label>Hora</label><input id="th" type="time"></div></div>
+ <div id="tn" style="display:none"><label>NSR a desconsiderar</label><input id="tr" inputmode="numeric"></div>
+ <label>Motivo (obrigatório)</label><textarea id="tm" rows="2"></textarea><button onclick="addTrat()">Registrar tratamento</button></div>
+ <div class="c"><h2>Histórico de tratamentos</h2><div class="t"><table><tr><th>Quando</th><th>Colab.</th><th>Tipo</th><th>Ref.</th><th>Motivo</th><th>Autor</th></tr>${D.trat.slice().reverse().map(t=>`<tr><td>${fmt(t.criado)}</td><td>${esc(U(t.uid).nome)}</td><td>${t.tipo}</td><td>${t.tipo=='incluir'?t.data+' '+t.hora:'NSR '+t.nsr}</td><td>${esc(t.motivo)}</td><td>${esc(t.autor)}</td></tr>`).join('')}</table></div></div>`;
+}
+async function addTrat(){
+ const v=i=>$('#'+i).value.trim(),tipo=v('tt'),uid=v('tu'),t={tipo,uid,data:v('td'),hora:v('th'),nsr:+v('tr')||0,motivo:v('tm'),autor:me.nome,criado:TS};
+ if(t.motivo.length<5)return alert('Informe o motivo.');
+ if(tipo=='incluir'&&(!t.data||!t.hora))return alert('Informe data e hora.');
+ if(tipo!='incluir'){const r=D.regs.find(x=>x.nsr==t.nsr&&x.uid==uid);if(!r)return alert('NSR não encontrado para esse colaborador.');t.data=dkey(r.ts)}
+ try{await db.ref('tratamentos/'+uid).push(t);await load();R()}catch(e){alert('Erro ao gravar: '+e.message)}
+}
+function verif(){
+ const ns=D.regs.map(r=>r.nsr);let bad=null;
+ for(let i=0;i<ns.length;i++)if(ns[i]!=i+1){bad=i+1;break}
+ modal(bad?`<p class="er"><b>NSR ${bad} ausente ou duplicado.</b></p>`:`<p class="ok"><b>Sequência íntegra:</b> NSR 1 a ${ns.length} sem lacunas.</p>`);
+}
+function afd(){
+ const iso=ts=>{const d=new Date(ts),o=-d.getTimezoneOffset(),s=o<0?'-':'+';return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())+s+pad(Math.floor(Math.abs(o)/60))+':'+pad(Math.abs(o)%60)};
+ const L=[['000000000','1',D.emp.cnpj,D.emp.rs,iso(Date.now())].join('\t')];
+ D.regs.forEach(r=>L.push([String(r.nsr).padStart(9,'0'),'7',iso(r.ts),U(r.uid).cpf].join('\t')));
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([L.join('\r\n')],{type:'text/plain'}));a.download='AFD_'+D.emp.cnpj+'.txt';a.click();
+}
+function vExp(){
+ $('#v').innerHTML=`<div class="c"><h2>Integridade e exportação</h2><p class="m">${D.regs.length} registros</p>
+ <button onclick="verif()">Verificar sequência de NSR</button> <button class="g" onclick="afd()">Exportar AFD (rascunho)</button>
+ <p class="m">O AFD é um rascunho: confira o layout com o Anexo da Portaria 671 (CRC-16 e demais tipos de registro) antes do uso oficial. O AEJ ainda não foi implementado.</p></div>`;
+}
+</script></body></html>
